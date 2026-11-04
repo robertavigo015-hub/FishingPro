@@ -237,6 +237,95 @@ export function makeTextures(scene: PScene): void {
     g.destroy();
   }
 
+  // оружие (смотрит вправо; точка вращения — рукоять)
+  {
+    const steel = 0x3a3f45, steelHi = 0x6b737c, wood = 0x8a5a2b, woodDk = 0x5e3b1a;
+    // пистолет 70×30
+    let g = make();
+    g.fillStyle(steel, 1);
+    g.fillRoundedRect(10, 4, 56, 11, 3);
+    g.fillStyle(steelHi, 1);
+    g.fillRect(14, 5, 48, 3);
+    g.fillStyle(0x2a2d31, 1);
+    g.fillPoints([{ x: 12, y: 14 }, { x: 26, y: 14 }, { x: 22, y: 30 }, { x: 8, y: 30 }], true);
+    g.lineStyle(3, steel, 1);
+    g.strokeCircle(30, 17, 5);
+    g.generateTexture('gun_pistol', 70, 30);
+    g.destroy();
+    // двустволка 130×26
+    g = make();
+    g.fillStyle(wood, 1);
+    g.fillPoints([{ x: 0, y: 9 }, { x: 36, y: 6 }, { x: 36, y: 20 }, { x: 4, y: 26 }], true);
+    g.fillStyle(woodDk, 1);
+    g.fillRect(36, 6, 18, 14);
+    g.fillStyle(steel, 1);
+    g.fillRect(50, 4, 78, 6);
+    g.fillRect(50, 11, 78, 6);
+    g.fillStyle(steelHi, 1);
+    g.fillRect(52, 5, 74, 2);
+    g.fillRect(52, 12, 74, 2);
+    g.generateTexture('gun_shotgun', 130, 26);
+    g.destroy();
+    // пулемётик 84×40
+    g = make();
+    g.fillStyle(steel, 1);
+    g.fillRoundedRect(10, 6, 56, 16, 4);
+    g.fillRect(64, 10, 18, 6);
+    g.fillStyle(0x2a2d31, 1);
+    g.fillRect(28, 20, 12, 18);
+    g.fillRect(46, 20, 9, 18);
+    g.fillStyle(steelHi, 1);
+    g.fillRect(14, 8, 48, 3);
+    g.generateTexture('gun_uzi', 84, 40);
+    g.destroy();
+    // револьвер 96×32
+    g = make();
+    g.fillStyle(0xb8bec6, 1);
+    g.fillRect(30, 6, 62, 9);
+    g.fillStyle(0x8d949c, 1);
+    g.fillRoundedRect(20, 3, 22, 16, 4);
+    g.fillStyle(0xffffff, 0.5);
+    g.fillRect(32, 7, 58, 2);
+    g.fillStyle(wood, 1);
+    g.fillPoints([{ x: 14, y: 14 }, { x: 30, y: 14 }, { x: 26, y: 32 }, { x: 8, y: 32 }], true);
+    g.generateTexture('gun_magnum', 96, 32);
+    g.destroy();
+  }
+
+  // вспышка выстрела (конус вправо)
+  {
+    const g = make();
+    g.fillStyle(0xffb020, 0.9);
+    g.fillTriangle(0, 32, 64, 14, 64, 50);
+    g.fillTriangle(0, 32, 40, 0, 46, 22);
+    g.fillTriangle(0, 32, 40, 64, 46, 42);
+    g.fillStyle(0xfff6c8, 1);
+    g.fillTriangle(0, 32, 50, 22, 50, 42);
+    g.fillCircle(6, 32, 8);
+    g.generateTexture('flash', 64, 64);
+    g.destroy();
+  }
+
+  // гильза и монетка
+  {
+    const g = make();
+    g.fillStyle(0xd9a521, 1);
+    g.fillRect(0, 0, 10, 5);
+    g.fillStyle(0xfff0a0, 1);
+    g.fillRect(1, 1, 8, 1);
+    g.generateTexture('shell', 10, 5);
+    g.destroy();
+    const c = make();
+    c.fillStyle(0xb8860b, 1);
+    c.fillCircle(14, 14, 14);
+    c.fillStyle(0xf2b822, 1);
+    c.fillCircle(14, 13, 12);
+    c.lineStyle(2, 0xffe58a, 1);
+    c.strokeCircle(14, 13, 8);
+    c.generateTexture('coin', 28, 28);
+    c.destroy();
+  }
+
   // прицел
   {
     const g = make();

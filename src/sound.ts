@@ -54,8 +54,16 @@ function noise(dur: number, vol: number, freq: number): void {
 }
 
 export const sfx = {
-  shot: () => noise(0.09, 0.25, 2500),
-  heavyShot: () => noise(0.2, 0.35, 1200),
+  shot: () => {
+    noise(0.08, 0.28, 3200);
+    tone(150, 0.07, 'square', 0.05, 60);
+  },
+  heavyShot: () => {
+    noise(0.22, 0.4, 1400);
+    tone(90, 0.16, 'square', 0.08, 40);
+  },
+  hit: () => tone(190, 0.07, 'square', 0.07, 80),
+  casing: () => tone(2600, 0.04, 'triangle', 0.025, 1800),
   hook: () => tone(660, 0.08, 'square', 0.06, 880),
   zap: () => tone(1200, 0.18, 'sawtooth', 0.05, 200),
   coin: () => {

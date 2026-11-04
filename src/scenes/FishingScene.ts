@@ -27,8 +27,18 @@ const ASC_START = 170;
 const ASC_ACC = 130;
 const ASC_MAX = 950;
 const MAGNET = 70;
-const GRAV = 650;
+const GRAV = 560;
 const BOTTOM_Y = WATER_Y + ZONE_DEPTH * PPM;
+// рука рыбака в мировых координатах (из текстуры лодки: кисть в точке 162,96)
+const HAND = { x: W / 2 - 30 - 145 + 162, y: WATER_Y - 60 - 90 + 92 };
+const GUN_SCALE = 1.8;
+interface GunArt { w: number; h: number; ox: number; oy: number; mx: number; my: number }
+const GUNS: Record<string, GunArt> = {
+  pistol: { w: 70, h: 30, ox: 16, oy: 18, mx: 66, my: 9 },
+  shotgun: { w: 130, h: 26, ox: 34, oy: 14, mx: 128, my: 10 },
+  uzi: { w: 84, h: 40, ox: 34, oy: 24, mx: 82, my: 13 },
+  magnum: { w: 96, h: 32, ox: 20, oy: 18, mx: 92, my: 10 },
+};
 const ROD_TIP = { x: W / 2 - 30 - 145 + 270, y: WATER_Y - 60 - 90 + 8 };
 
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
@@ -60,6 +70,11 @@ export class FishingScene extends Phaser.Scene {
   private camLocked = false;
   private bubbleT = 0;
   private lineLimitY = 0;
+  private gun: PImage = null;
+  private gunInfo: GunArt = GUNS.pistol;
+  private aim = -Math.PI / 2;
+  private recoil = 0;
+  private hitstop = 0;
 
   constructor() {
     super('Fishing');
@@ -79,6 +94,9 @@ export class FishingScene extends Phaser.Scene {
     this.ending = false;
     this.maxDepth = 0;
     this.camLocked = false;
+    this.gun = null;
+    this.recoil = 0;
+    this.hitstop = 0;
     this.lineLimitY = WATER_Y + Math.min(reelDepth(), ZONE_DEPTH) * PPM - 14;
 
     this.drawWorld();
@@ -114,6 +132,13 @@ export class FishingScene extends Phaser.Scene {
         this.splash(this.lure.x, WATER_Y, 8);
         sfx.splash();
         this.phase = 'descent';
+        if (location.hash === '#debug-shoot') {
+          // отладка стрельбы: сразу подбрасываем десяток случайных рыб
+          for (const f of this.fish.filter((o) => o.def.kind !== 'boss').sort(() => Math.random() - 0.5).slice(0, 10)) this.hook(f);
+          this.lure.y = WATER_Y + 4;
+          this.startLaunch();
+          return;
+        }
         if (S.d.bestDepth < 40) this.say('Уворачивайтесь от рыб!\nНаклон телефона, палец или ←/→', 3000);
       },
     });
@@ -384,26 +409,70 @@ export class FishingScene extends Phaser.Scene {
       f.st = 'air';
       f.hp = f.def.hp;
       f.spr.setPosition(this.lure.x + rnd(-24, 24), WATER_Y - 10).setDepth(30);
-      f.vx = rnd(-170, 170);
-      f.vy = -rnd(760, 1150) * Math.sqrt(gs);
+      f.vx = rnd(-260, 260);
+      f.vy = -rnd(720, 1100) * Math.sqrt(gs);
       f.spin = rnd(-3.5, 3.5);
     }
     this.hooked = [];
     haptic('heavy');
     if (S.d.bestDepth < 40) this.say('Стреляйте пальцем!\nМусор не трогайте — штраф', 2400);
     this.cross.setVisible(true);
+    this.showGun();
+  }
+
+  // ---------- оружие ----------
+  private showGun(): void {
+    const id = S.d.gun in GUNS ? S.d.gun : 'pistol';
+    this.gunInfo = GUNS[id];
+    this.gun = this.add.image(HAND.x, HAND.y, 'gun_' + id)
+      .setOrigin(this.gunInfo.ox / this.gunInfo.w, this.gunInfo.oy / this.gunInfo.h)
+      .setDepth(28).setScale(0);
+    this.aim = -Math.PI / 2 + 0.25;
+    this.gun.rotation = this.aim;
+    this.tweens.add({ targets: this.gun, scale: GUN_SCALE, duration: 250, ease: 'Back.out' });
+  }
+
+  private aimAt(x: number, y: number): void {
+    let a = Math.atan2(y - HAND.y, x - HAND.x);
+    if (a > -0.12) a = a > Math.PI / 2 ? -Math.PI + 0.12 : -0.12; // только вверх
+    this.aim = a;
+  }
+
+  private updateGun(dt: number): void {
+    if (!this.gun) return;
+    this.recoil *= Math.exp(-dt * 16);
+    const a = this.aim;
+    const left = a < -Math.PI / 2;
+    this.gun.rotation = a;
+    this.gun.setFlipY(left);
+    this.gun.setPosition(HAND.x - Math.cos(a) * this.recoil, HAND.y - Math.sin(a) * this.recoil);
+  }
+
+  private muzzle(): { x: number; y: number } {
+    const gi = this.gunInfo;
+    const a = this.aim;
+    const lx = (gi.mx - gi.ox) * GUN_SCALE;
+    const ly = (gi.my - gi.oy) * GUN_SCALE * (a < -Math.PI / 2 ? -1 : 1);
+    return {
+      x: this.gun.x + lx * Math.cos(a) - ly * Math.sin(a),
+      y: this.gun.y + lx * Math.sin(a) + ly * Math.cos(a),
+    };
   }
 
   private updateLaunch(dt: number, time: number): void {
     const gs = owns('spring') ? 0.55 : 1;
     let alive = 0;
+    const frozen = this.hitstop > 0;
+    if (frozen) this.hitstop -= dt;
     for (const f of this.fish) {
       if (f.st !== 'air') continue;
       alive++;
+      if (frozen) continue;
       f.vy += GRAV * gs * dt;
       f.spr.x += f.vx * dt;
       f.spr.y += f.vy * dt;
       f.spr.rotation += f.spin * dt;
+      f.vx *= Math.exp(-dt * 0.6);
       const hw = f.def.w / 2;
       if (f.spr.x < hw || f.spr.x > W - hw) {
         f.vx = -f.vx;
@@ -420,6 +489,10 @@ export class FishingScene extends Phaser.Scene {
     // стрельба: каждый палец стреляет сам по себе
     const cam = this.cameras.main;
     const gun = currentGun();
+    const ap = this.input.activePointer;
+    const awp = cam.getWorldPoint(ap.x, ap.y);
+    this.cross.setPosition(awp.x, awp.y);
+    this.aimAt(awp.x, awp.y);
     const pointers: PPointer[] = this.input.manager.pointers;
     for (const p of pointers) {
       if (!p.isDown) continue;
@@ -427,39 +500,79 @@ export class FishingScene extends Phaser.Scene {
       if (time - last < gun.reload) continue;
       this.lastShot[p.id] = time;
       const wp = cam.getWorldPoint(p.x, p.y);
+      this.aimAt(wp.x, wp.y);
+      this.updateGun(0);
       this.fire(wp.x, wp.y);
     }
-    const ap = this.input.activePointer;
-    const wp = cam.getWorldPoint(ap.x, ap.y);
-    this.cross.setPosition(wp.x, wp.y);
+    this.updateGun(dt);
 
     if (alive === 0 && !this.ending) {
       this.ending = true;
-      this.time.delayedCall(900, () => this.showResults());
+      this.time.delayedCall(900, () => {
+        if (this.gun) this.tweens.add({ targets: this.gun, scale: 0, duration: 200 });
+        this.showResults();
+      });
     }
   }
 
   private fire(x: number, y: number): void {
     const gun = currentGun();
-    if (gun.pellets > 1 || gun.dmg > 10) sfx.heavyShot();
+    const heavy = gun.pellets > 1 || gun.dmg > 10;
+    if (heavy) sfx.heavyShot();
     else sfx.shot();
-    if (gun.reload >= 200) haptic('light');
+    if (gun.reload >= 200) haptic(heavy ? 'medium' : 'light');
+    const m = this.muzzle();
+    const a = this.aim;
+
+    // вспышка, отдача, тряска
+    const fl = this.add.image(m.x, m.y, 'flash').setOrigin(0, 0.5).setRotation(a).setDepth(29)
+      .setScale(rnd(1.1, 1.5) * (heavy ? 1.6 : 1));
+    this.tweens.add({ targets: fl, alpha: 0, scaleX: fl.scaleX * 1.3, duration: heavy ? 130 : 90, onComplete: () => fl.destroy() });
+    const glow = this.add.image(m.x, m.y, 'glow').setDepth(27).setBlendMode(Phaser.BlendModes.ADD).setScale(heavy ? 0.6 : 0.35).setAlpha(0.7);
+    this.tweens.add({ targets: glow, alpha: 0, duration: 120, onComplete: () => glow.destroy() });
+    this.recoil = heavy ? 26 : 13;
+    this.cameras.main.shake(heavy ? 110 : 50, heavy ? 0.007 : 0.0022);
+    this.tweens.killTweensOf(this.cross);
+    this.cross.setScale(1.35);
+    this.tweens.add({ targets: this.cross, scale: 1, duration: 120 });
+    this.ejectShell(a);
+
     const targets = this.fish.filter((f) => f.st === 'air').reverse();
+    const tracer = this.add.graphics().setDepth(29);
     for (let i = 0; i < gun.pellets; i++) {
-      const a = Math.random() * Math.PI * 2;
+      const ang = Math.random() * Math.PI * 2;
       const r = Math.sqrt(Math.random()) * gun.spread;
-      const px = x + Math.cos(a) * r;
-      const py = y + Math.sin(a) * r;
-      const fx = this.add.image(px, py, 'dot').setDepth(80).setTint(0xffe58a).setScale(0.6);
-      this.tweens.add({ targets: fx, scale: 0, alpha: 0, duration: 160, onComplete: () => fx.destroy() });
+      const px = x + Math.cos(ang) * r;
+      const py = y + Math.sin(ang) * r;
+      tracer.lineStyle(heavy ? 12 : 9, 0xffa020, 0.35);
+      tracer.lineBetween(m.x, m.y, px, py);
+      tracer.lineStyle(heavy ? 4 : 3, 0xfffbe0, 1);
+      tracer.lineBetween(m.x, m.y, px, py);
+      let hit = false;
       for (const f of targets) {
         if (f.st !== 'air') continue;
         if (this.pointIn(f, px, py)) {
-          this.damage(f, gun.dmg);
+          this.damage(f, gun.dmg, px, py, Math.atan2(py - m.y, px - m.x));
+          hit = true;
           break;
         }
       }
+      if (!hit && gun.pellets === 1) {
+        const puff = this.add.image(px, py, 'dot').setDepth(80).setTint(0xdfe8ee).setScale(0.5).setAlpha(0.8);
+        this.tweens.add({ targets: puff, scale: 1.4, alpha: 0, duration: 220, onComplete: () => puff.destroy() });
+      }
     }
+    this.tweens.add({ targets: tracer, alpha: 0, duration: 130, ease: 'Quad.in', onComplete: () => tracer.destroy() });
+  }
+
+  private ejectShell(a: number): void {
+    const left = a < -Math.PI / 2;
+    const s = this.add.image(HAND.x, HAND.y - 6, 'shell').setDepth(27);
+    const side = left ? 1 : -1;
+    const tx = HAND.x + side * rnd(40, 90);
+    this.tweens.add({ targets: s, x: tx, y: HAND.y - rnd(50, 90), angle: rnd(200, 500) * side, duration: 160, ease: 'Quad.out',
+      onComplete: () => this.tweens.add({ targets: s, y: WATER_Y + 4, x: tx + side * 20, angle: s.angle + 300 * side, duration: 260, ease: 'Quad.in',
+        onComplete: () => { s.destroy(); sfx.casing(); } }) });
   }
 
   private pointIn(f: FishObj, px: number, py: number): boolean {
@@ -473,12 +586,31 @@ export class FishingScene extends Phaser.Scene {
     return (lx * lx) / (a * a) + (ly * ly) / (b * b) <= 1;
   }
 
-  private damage(f: FishObj, dmg: number): void {
+  private damage(f: FishObj, dmg: number, px: number, py: number, dir: number): void {
     f.hp -= dmg;
-    f.vy -= 35;
+    // отбрасывание по направлению выстрела и закрутка
+    const push = f.def.kind === 'boss' ? 12 : 70;
+    f.vx += Math.cos(dir) * push;
+    f.vy += Math.sin(dir) * push - 30;
+    f.spin += rnd(-4, 4);
     f.spr.setTintFill(0xffffff);
-    this.time.delayedCall(45, () => f.spr.active && f.spr.clearTint());
-    if (f.hp <= 0) this.kill(f);
+    this.time.delayedCall(50, () => f.spr.active && f.spr.clearTint());
+    sfx.hit();
+    // искры
+    for (let i = 0; i < 5; i++) {
+      const sp = this.add.image(px, py, 'dot').setDepth(82).setTint(i % 2 ? 0xffffff : 0xffd35a).setScale(rnd(0.25, 0.45));
+      const aa = dir + Math.PI + rnd(-1, 1);
+      const rr = rnd(20, 55);
+      this.tweens.add({ targets: sp, x: px + Math.cos(aa) * rr, y: py + Math.sin(aa) * rr, alpha: 0, duration: rnd(150, 260), onComplete: () => sp.destroy() });
+    }
+    if (f.hp > 0) {
+      const t = txt(this, px, py - 10, '−' + dmg, 22, '#ffffff', { fontStyle: 'bold', stroke: '#0b2236', strokeThickness: 4 }).setOrigin(0.5).setDepth(83);
+      this.tweens.add({ targets: t, y: t.y - 36, alpha: 0, duration: 420, onComplete: () => t.destroy() });
+      // «пружинка» спрайта при попадании
+      this.tweens.add({ targets: f.spr, scaleX: 1.15, scaleY: 0.88, duration: 50, yoyo: true });
+    } else {
+      this.kill(f);
+    }
   }
 
   private kill(f: FishObj): void {
@@ -486,21 +618,46 @@ export class FishingScene extends Phaser.Scene {
     const v = f.def.value > 0 ? Math.round(f.def.value * priceMult()) : f.def.value;
     this.runMoney += v;
     this.killed[f.def.id] = (this.killed[f.def.id] || 0) + 1;
+    this.hitstop = f.def.kind === 'boss' ? 0.18 : 0.045;
     const t = txt(this, f.spr.x, f.spr.y, (v > 0 ? '+' : '−') + money(Math.abs(v)), v > 0 ? 34 : 38, v > 0 ? '#ffe58a' : '#ff6b5a', {
       fontStyle: 'bold', stroke: '#0b2236', strokeThickness: 6,
-    }).setOrigin(0.5).setDepth(85);
-    this.tweens.add({ targets: t, y: t.y - 90, alpha: 0, duration: 900, ease: 'Sine.out', onComplete: () => t.destroy() });
-    this.burst(f.spr.x, f.spr.y, f.def.color, f.def.kind === 'boss' ? 30 : 10);
-    this.tweens.add({ targets: f.spr, scale: 0, alpha: 0, duration: 220, onComplete: () => f.spr.destroy() });
+    }).setOrigin(0.5).setDepth(85).setScale(0.4);
+    this.tweens.add({ targets: t, scale: 1, duration: 140, ease: 'Back.out' });
+    this.tweens.add({ targets: t, y: t.y - 90, alpha: 0, delay: 250, duration: 750, ease: 'Sine.out', onComplete: () => t.destroy() });
+    this.burst(f.spr.x, f.spr.y, f.def.color, f.def.kind === 'boss' ? 36 : 14);
+    this.burst(f.spr.x, f.spr.y, 0xffffff, 6);
+    // рыба «лопается»: короткое раздувание и исчезновение
+    f.spr.setTintFill(0xffffff);
+    this.tweens.add({ targets: f.spr, scale: 1.35, duration: 70, onComplete: () =>
+      this.tweens.add({ targets: f.spr, scale: 0, alpha: 0, duration: 160, onComplete: () => f.spr.destroy() }) });
     if (v > 0) {
-      sfx.coin();
       haptic('medium');
+      this.flyCoins(f.spr.x, f.spr.y, Math.min(6, 1 + Math.floor(v / 15)));
     } else {
       sfx.bad();
       haptic('error');
-      this.cameras.main.shake(160, 0.006);
+      this.cameras.main.shake(180, 0.008);
+      this.cameras.main.flash(120, 160, 30, 20);
     }
-    if (f.def.kind === 'boss') this.cameras.main.shake(300, 0.012);
+    if (f.def.kind === 'boss') this.cameras.main.shake(350, 0.014);
+  }
+
+  private flyCoins(x: number, y: number, n: number): void {
+    const target = { x: W - 60, y: 52 };
+    for (let i = 0; i < n; i++) {
+      const c = this.add.image(x, y, 'coin').setDepth(95).setScale(0.9);
+      const mx = x + rnd(-70, 70);
+      const my = y + rnd(-80, -20);
+      this.tweens.add({ targets: c, x: mx, y: my, duration: 160, ease: 'Quad.out', delay: i * 35,
+        onComplete: () => this.tweens.add({ targets: c, x: target.x, y: target.y, scale: 0.5, duration: 380, ease: 'Quad.in',
+          onComplete: () => {
+            c.destroy();
+            if (i === 0) sfx.coin();
+            this.tweens.killTweensOf(this.rightText);
+            this.rightText.setScale(1.25);
+            this.tweens.add({ targets: this.rightText, scale: 1, duration: 140 });
+          } }) });
+    }
   }
 
   // ---------- итоги ----------

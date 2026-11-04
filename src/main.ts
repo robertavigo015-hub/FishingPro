@@ -8,7 +8,7 @@ import { FishopediaScene } from './scenes/FishopediaScene';
 
 initTelegram();
 
-new Phaser.Game({
+const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'game',
   backgroundColor: '#0b2236',
@@ -22,3 +22,6 @@ new Phaser.Game({
   render: { antialias: true },
   scene: [BootScene, MenuScene, FishingScene, ShopScene, FishopediaScene],
 });
+
+// отладка: доступ к игре из консоли только в режиме #debug-…
+if (location.hash.startsWith('#debug')) (window as any).__game = game;
