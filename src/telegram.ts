@@ -67,7 +67,8 @@ export function startTilt(): void {
 /** Наклон в диапазоне −1…1 (вправо — плюс) или null, если датчика нет. */
 export function getTilt(invert: boolean): number | null {
   if (tiltX === null) return null;
-  const v = Math.max(-1, Math.min(1, -tiltX / 4.5));
+  // знак проверен на телефоне: наклон вправо → блесна вправо
+  const v = Math.max(-1, Math.min(1, tiltX / 4.5));
   return invert ? -v : v;
 }
 

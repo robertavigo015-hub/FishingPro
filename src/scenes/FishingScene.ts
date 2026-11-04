@@ -32,6 +32,8 @@ const BOTTOM_Y = WATER_Y + ZONE_DEPTH * PPM;
 // рука рыбака в мировых координатах (из текстуры лодки: кисть в точке 162,96)
 const HAND = { x: W / 2 - 30 - 145 + 162, y: WATER_Y - 60 - 90 + 92 };
 const GUN_SCALE = 1.8;
+const RAY_LEN = 1600; // дальность луча выстрела, px
+const RAY_PAD = 10; // запас вокруг рыбы для попадания лучом, px
 interface GunArt { w: number; h: number; ox: number; oy: number; mx: number; my: number }
 const GUNS: Record<string, GunArt> = {
   pistol: { w: 70, h: 30, ox: 16, oy: 18, mx: 66, my: 9 },
@@ -537,27 +539,37 @@ export class FishingScene extends Phaser.Scene {
     this.tweens.add({ targets: this.cross, scale: 1, duration: 120 });
     this.ejectShell(a);
 
-    const targets = this.fish.filter((f) => f.st === 'air').reverse();
+    // Каждая дробина — луч от ствола через точку касания и дальше.
+    // Засчитывается первая рыба на пути луча; трассер обрывается на ней.
+    const targets = this.fish.filter((f) => f.st === 'air');
     const tracer = this.add.graphics().setDepth(29);
     for (let i = 0; i < gun.pellets; i++) {
       const ang = Math.random() * Math.PI * 2;
       const r = Math.sqrt(Math.random()) * gun.spread;
       const px = x + Math.cos(ang) * r;
       const py = y + Math.sin(ang) * r;
-      tracer.lineStyle(heavy ? 12 : 9, 0xffa020, 0.35);
-      tracer.lineBetween(m.x, m.y, px, py);
-      tracer.lineStyle(heavy ? 4 : 3, 0xfffbe0, 1);
-      tracer.lineBetween(m.x, m.y, px, py);
-      let hit = false;
+      const len = Math.hypot(px - m.x, py - m.y) || 1;
+      const dx = (px - m.x) / len;
+      const dy = (py - m.y) / len;
+      let best: FishObj | null = null;
+      let bestT = RAY_LEN;
       for (const f of targets) {
         if (f.st !== 'air') continue;
-        if (this.pointIn(f, px, py)) {
-          this.damage(f, gun.dmg, px, py, Math.atan2(py - m.y, px - m.x));
-          hit = true;
-          break;
+        const t = this.rayHit(f, m.x, m.y, dx, dy);
+        if (t !== null && t < bestT) {
+          bestT = t;
+          best = f;
         }
       }
-      if (!hit && gun.pellets === 1) {
+      const ex = m.x + dx * bestT;
+      const ey = m.y + dy * bestT;
+      tracer.lineStyle(heavy ? 12 : 9, 0xffa020, 0.35);
+      tracer.lineBetween(m.x, m.y, ex, ey);
+      tracer.lineStyle(heavy ? 4 : 3, 0xfffbe0, 1);
+      tracer.lineBetween(m.x, m.y, ex, ey);
+      if (best) {
+        this.damage(best, gun.dmg, ex, ey, Math.atan2(dy, dx));
+      } else if (gun.pellets === 1) {
         const puff = this.add.image(px, py, 'dot').setDepth(80).setTint(0xdfe8ee).setScale(0.5).setAlpha(0.8);
         this.tweens.add({ targets: puff, scale: 1.4, alpha: 0, duration: 220, onComplete: () => puff.destroy() });
       }
@@ -575,15 +587,25 @@ export class FishingScene extends Phaser.Scene {
         onComplete: () => { s.destroy(); sfx.casing(); } }) });
   }
 
-  private pointIn(f: FishObj, px: number, py: number): boolean {
-    const dx = px - f.spr.x;
-    const dy = py - f.spr.y;
-    const r = -f.spr.rotation;
-    const lx = dx * Math.cos(r) - dy * Math.sin(r);
-    const ly = dx * Math.sin(r) + dy * Math.cos(r);
-    const a = f.def.w * 0.5 + 12;
-    const b = f.def.h * 0.5 + 12;
-    return (lx * lx) / (a * a) + (ly * ly) / (b * b) <= 1;
+  /** Расстояние от ствола до входа луча в рыбу (эллипс с запасом) или null. */
+  private rayHit(f: FishObj, ox: number, oy: number, dx: number, dy: number): number | null {
+    const rot = -f.spr.rotation;
+    const c = Math.cos(rot), s = Math.sin(rot);
+    const rx = ox - f.spr.x, ry = oy - f.spr.y;
+    const lox = rx * c - ry * s, loy = rx * s + ry * c;
+    const ldx = dx * c - dy * s, ldy = dx * s + dy * c;
+    const a = f.def.w * 0.5 + RAY_PAD;
+    const b = f.def.h * 0.5 + RAY_PAD;
+    const A = (ldx * ldx) / (a * a) + (ldy * ldy) / (b * b);
+    const B = 2 * ((lox * ldx) / (a * a) + (loy * ldy) / (b * b));
+    const C = (lox * lox) / (a * a) + (loy * loy) / (b * b) - 1;
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) return null;
+    const sq = Math.sqrt(disc);
+    const t1 = (-B - sq) / (2 * A);
+    const t2 = (-B + sq) / (2 * A);
+    if (t2 < 0) return null;
+    return Math.max(0, t1);
   }
 
   private damage(f: FishObj, dmg: number, px: number, py: number, dir: number): void {
