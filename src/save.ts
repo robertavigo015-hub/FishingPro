@@ -1,4 +1,4 @@
-import { SHOP_BY_ID, START_REEL, GunDef } from './data';
+import { SHOP_BY_ID, START_REEL, GunDef, FISH, ZONE_BY_ID, ZoneDef, ZoneId } from './data';
 import { cloudGet, cloudSet } from './telegram';
 
 export interface SaveData {
@@ -7,7 +7,9 @@ export interface SaveData {
   owned: string[];
   gun: string;
   caught: Record<string, number>;
-  bestDepth: number;
+  bestDepth: number; // устарело: рекорд пруда из v0.1
+  best: Record<string, number>; // рекорд глубины по зонам
+  zone: ZoneId;
   tiltOn: boolean;
   tiltInvert: boolean;
   sound: boolean;
@@ -17,7 +19,7 @@ export interface SaveData {
 const KEY = 'fishing_save_v1';
 
 export function defaultSave(): SaveData {
-  return { v: 1, money: 0, owned: ['pistol'], gun: 'pistol', caught: {}, bestDepth: 0, tiltOn: true, tiltInvert: false, sound: true, ts: 0 };
+  return { v: 1, money: 0, owned: ['pistol'], gun: 'pistol', caught: {}, bestDepth: 0, best: {}, zone: 'pond', tiltOn: true, tiltInvert: false, sound: true, ts: 0 };
 }
 
 export const S: { d: SaveData } = { d: defaultSave() };
@@ -26,7 +28,13 @@ function parse(s: string | null): SaveData | null {
   if (!s) return null;
   try {
     const o = JSON.parse(s);
-    if (o && o.v === 1) return { ...defaultSave(), ...o };
+    if (o && o.v === 1) {
+      const d: SaveData = { ...defaultSave(), ...o };
+      d.best = { ...(o.best || {}) };
+      if (!d.best.pond && o.bestDepth) d.best.pond = o.bestDepth;
+      if (!ZONE_BY_ID[d.zone]) d.zone = 'pond';
+      return d;
+    }
   } catch {
     /* ignore */
   }
@@ -76,5 +84,23 @@ export function currentGun(): GunDef {
 }
 
 export function priceMult(): number {
+  if (owns('vatnik')) return 1.25;
   return owns('telnyashka') ? 1.1 : 1;
+}
+
+/** Сколько разных видов (без мусора и охраняемых) уже поймано. */
+export function speciesCount(): number {
+  return FISH.filter((f) => f.kind !== 'junk' && f.kind !== 'protected' && (S.d.caught[f.id] || 0) > 0).length;
+}
+
+export function zoneUnlocked(z: ZoneDef): boolean {
+  return speciesCount() >= z.unlock;
+}
+
+export function zone(): ZoneDef {
+  return ZONE_BY_ID[S.d.zone] || ZONE_BY_ID.pond;
+}
+
+export function best(z: ZoneId): number {
+  return S.d.best[z] || 0;
 }

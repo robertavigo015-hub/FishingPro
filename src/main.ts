@@ -5,6 +5,7 @@ import { MenuScene } from './scenes/MenuScene';
 import { FishingScene } from './scenes/FishingScene';
 import { ShopScene } from './scenes/ShopScene';
 import { FishopediaScene } from './scenes/FishopediaScene';
+import { MapScene } from './scenes/MapScene';
 
 initTelegram();
 
@@ -20,7 +21,7 @@ const game = new Phaser.Game({
   },
   input: { activePointers: 3 },
   render: { antialias: true },
-  scene: [BootScene, MenuScene, FishingScene, ShopScene, FishopediaScene],
+  scene: [BootScene, MenuScene, FishingScene, ShopScene, FishopediaScene, MapScene],
 });
 
 // отладка: доступ к игре из консоли только в режиме #debug-…

@@ -10,6 +10,7 @@ const res = await build({
   minify: true,
   format: 'iife',
   target: 'es2019',
+  charset: 'utf8',
   write: false,
 });
 const js = res.outputFiles[0].text;
@@ -21,7 +22,7 @@ writeFileSync(
   'dist/index.html',
   html
     .replace('<!--TELEGRAM-->', '<script src="https://telegram.org/js/telegram-web-app.js"></script>')
-    .replace('<!--GAME-->', `<script src="game.js?v=${Date.now()}"></script>`),
+    .replace('<!--GAME-->', `<script src="game.js?v=${Date.now()}" charset="utf-8"></script>`),
 );
 
 mkdirSync('preview', { recursive: true });

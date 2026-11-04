@@ -49,7 +49,7 @@ export function button(
   zone.on('pointerout', () => draw(false));
   zone.on('pointerup', () => {
     draw(false);
-    if (!enabled) return;
+    if (!enabled || scene.__dragged) return; // прокрутка списка, а не нажатие
     sfx.click();
     haptic('light');
     onClick();

@@ -55,7 +55,148 @@ function drawFish(g: PGraphics, f: FishDef): void {
     return;
   }
 
-  const long = f.shape === 'long' || f.shape === 'cat';
+  if (f.shape === 'anchor') {
+    g.lineStyle(7, f.color, 1);
+    g.strokeCircle(cx, cy - h * 0.4, 6);
+    g.lineBetween(cx, cy - h * 0.32, cx, cy + h * 0.38);
+    g.lineBetween(cx - w * 0.28, cy - h * 0.16, cx + w * 0.28, cy - h * 0.16);
+    g.beginPath();
+    g.arc(cx, cy + h * 0.05, w * 0.4, 0.25, Math.PI - 0.25, false);
+    g.strokePath();
+    g.fillStyle(f.color, 1);
+    g.fillTriangle(cx - w * 0.47, cy + h * 0.05, cx - w * 0.32, cy + h * 0.2, cx - w * 0.44, cy + h * 0.26);
+    g.fillTriangle(cx + w * 0.47, cy + h * 0.05, cx + w * 0.32, cy + h * 0.2, cx + w * 0.44, cy + h * 0.26);
+    return;
+  }
+  if (f.shape === 'bottle') {
+    g.fillStyle(f.color, 0.9);
+    g.fillRoundedRect(cx - w / 2, cy - h * 0.15, w, h * 0.65, 6);
+    g.fillRect(cx - w * 0.18, cy - h / 2 + 4, w * 0.36, h * 0.4);
+    g.fillStyle(0x8a5a2b, 1);
+    g.fillRect(cx - w * 0.2, cy - h / 2, w * 0.4, 6);
+    g.fillStyle(f.belly, 1);
+    g.fillRoundedRect(cx - w * 0.28, cy, w * 0.56, h * 0.3, 3);
+    g.fillStyle(0xffffff, 0.45);
+    g.fillRect(cx - w * 0.38, cy - h * 0.1, 3, h * 0.5);
+    return;
+  }
+  if (f.shape === 'buoy') {
+    g.lineStyle(3, 0x333333, 1);
+    g.lineBetween(cx, cy - h / 2, cx, cy - h * 0.15);
+    g.fillStyle(0xffe58a, 1);
+    g.fillCircle(cx, cy - h / 2 + 4, 4);
+    g.fillStyle(f.color, 1);
+    g.fillEllipse(cx, cy + h * 0.15, w, h * 0.68);
+    g.fillStyle(f.belly, 1);
+    g.fillRect(cx - w / 2 + 3, cy + h * 0.08, w - 6, h * 0.12);
+    g.lineStyle(2, f.fin, 1);
+    g.strokeEllipse(cx, cy + h * 0.15, w, h * 0.68);
+    return;
+  }
+  if (f.shape === 'crab') {
+    g.lineStyle(4, f.fin, 1);
+    for (let i = 0; i < 4; i++) {
+      const x = cx - w * 0.22 + i * w * 0.14;
+      g.lineBetween(x, cy + h * 0.1, x - w * 0.12, cy + h * 0.5);
+      g.lineBetween(x, cy - h * 0.05, x - w * 0.14, cy - h * 0.42);
+    }
+    g.fillStyle(f.color, 1);
+    g.fillEllipse(cx - w * 0.04, cy, w * 0.62, h * 0.62);
+    g.fillCircle(cx + w * 0.38, cy - h * 0.25, w * 0.11);
+    g.fillCircle(cx + w * 0.38, cy + h * 0.25, w * 0.11);
+    g.lineStyle(5, f.color, 1);
+    g.lineBetween(cx + w * 0.2, cy - h * 0.1, cx + w * 0.34, cy - h * 0.22);
+    g.lineBetween(cx + w * 0.2, cy + h * 0.1, cx + w * 0.34, cy + h * 0.22);
+    g.fillStyle(f.belly, 0.7);
+    for (let i = 0; i < 6; i++) g.fillCircle(cx - w * 0.2 + (i % 3) * w * 0.14, cy - h * 0.12 + Math.floor(i / 3) * h * 0.2, 2.5);
+    g.fillStyle(0x111111, 1);
+    g.fillCircle(cx + w * 0.24, cy - h * 0.08, 3);
+    g.fillCircle(cx + w * 0.24, cy + h * 0.08, 3);
+    return;
+  }
+  if (f.shape === 'squid') {
+    // голова-мантия слева, щупальца вправо
+    g.lineStyle(6, f.fin, 1);
+    for (let i = 0; i < 6; i++) {
+      const yy = cy - h * 0.25 + i * h * 0.1;
+      g.beginPath();
+      g.moveTo(cx + w * 0.05, yy);
+      g.lineTo(cx + w * 0.22, yy + Math.sin(i) * 10);
+      g.lineTo(cx + w * 0.38, yy - Math.sin(i * 1.7) * 12);
+      g.lineTo(cx + w * 0.48, yy + Math.cos(i) * 8);
+      g.strokePath();
+    }
+    g.fillStyle(f.color, 1);
+    g.fillEllipse(cx - w * 0.15, cy, w * 0.6, h * 0.56);
+    g.fillTriangle(cx - w * 0.5, cy, cx - w * 0.36, cy - h * 0.48, cx - w * 0.3, cy);
+    g.fillTriangle(cx - w * 0.5, cy, cx - w * 0.36, cy + h * 0.48, cx - w * 0.3, cy);
+    g.fillStyle(f.belly, 0.6);
+    for (let i = 0; i < 8; i++) g.fillCircle(cx - w * 0.35 + i * w * 0.06, cy - h * 0.1 + ((i * 37) % 20) - 10, 4);
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(cx + w * 0.06, cy - h * 0.06, h * 0.13);
+    g.fillStyle(0x111111, 1);
+    g.fillCircle(cx + w * 0.07, cy - h * 0.06, h * 0.08);
+    return;
+  }
+  if (f.shape === 'angler') {
+    g.fillStyle(f.fin, 1);
+    g.fillTriangle(cx - w * 0.3, cy, cx - w / 2, cy - h * 0.35, cx - w / 2, cy + h * 0.35);
+    g.fillStyle(f.color, 1);
+    g.fillCircle(cx, cy + h * 0.05, h * 0.42);
+    g.fillStyle(0x1a0a0a, 1);
+    g.fillEllipse(cx + w * 0.2, cy + h * 0.15, w * 0.32, h * 0.32);
+    g.fillStyle(0xffffff, 1);
+    for (let i = 0; i < 5; i++) g.fillTriangle(cx + w * 0.08 + i * w * 0.06, cy + h * 0.01, cx + w * 0.11 + i * w * 0.06, cy + h * 0.13, cx + w * 0.14 + i * w * 0.06, cy + h * 0.01);
+    g.lineStyle(2, f.belly, 1);
+    g.beginPath();
+    g.moveTo(cx, cy - h * 0.3);
+    g.lineTo(cx + w * 0.18, cy - h * 0.48);
+    g.lineTo(cx + w * 0.36, cy - h * 0.38);
+    g.strokePath();
+    g.fillStyle(0xfff3a0, 1);
+    g.fillCircle(cx + w * 0.38, cy - h * 0.36, 5);
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(cx + w * 0.12, cy - h * 0.14, 5);
+    g.fillStyle(0x111111, 1);
+    g.fillCircle(cx + w * 0.13, cy - h * 0.14, 2.5);
+    return;
+  }
+  if (f.shape === 'seal') {
+    g.fillStyle(f.fin, 1);
+    g.fillTriangle(cx - w * 0.36, cy, cx - w / 2, cy - h * 0.38, cx - w / 2, cy + h * 0.38);
+    g.fillEllipse(cx + w * 0.02, cy + h * 0.32, w * 0.2, h * 0.26);
+    g.fillStyle(f.color, 1);
+    g.fillEllipse(cx - w * 0.04, cy + h * 0.02, w * 0.72, h * 0.78);
+    g.fillCircle(cx + w * 0.3, cy - h * 0.06, h * 0.4);
+    g.fillStyle(f.belly, 1);
+    g.fillEllipse(cx - w * 0.02, cy + h * 0.2, w * 0.5, h * 0.3);
+    g.fillStyle(0x111111, 1);
+    g.fillCircle(cx + w * 0.36, cy - h * 0.16, 4);
+    g.fillCircle(cx + w * 0.24, cy - h * 0.16, 4);
+    g.fillCircle(cx + w * 0.44, cy - h * 0.0, 3);
+    g.lineStyle(1, 0x333333, 1);
+    g.lineBetween(cx + w * 0.42, cy + h * 0.04, cx + w * 0.5, cy + h * 0.0);
+    g.lineBetween(cx + w * 0.42, cy + h * 0.07, cx + w * 0.5, cy + h * 0.1);
+    return;
+  }
+  if (f.shape === 'flat') {
+    g.fillStyle(f.fin, 1);
+    g.fillTriangle(cx - w * 0.36, cy, cx - w / 2, cy - h * 0.3, cx - w / 2, cy + h * 0.3);
+    g.fillEllipse(cx + w * 0.02, cy, w * 0.8, h);
+    g.fillStyle(f.color, 1);
+    g.fillEllipse(cx + w * 0.04, cy, w * 0.68, h * 0.8);
+    g.fillStyle(f.belly, 0.5);
+    for (let i = 0; i < 7; i++) g.fillCircle(cx - w * 0.18 + (i % 4) * w * 0.12, cy - h * 0.15 + Math.floor(i / 4) * h * 0.3, 4);
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(cx + w * 0.26, cy - h * 0.2, 5);
+    g.fillCircle(cx + w * 0.3, cy - h * 0.02, 5);
+    g.fillStyle(0x111111, 1);
+    g.fillCircle(cx + w * 0.27, cy - h * 0.2, 2.5);
+    g.fillCircle(cx + w * 0.31, cy - h * 0.02, 2.5);
+    return;
+  }
+
+  const long = f.shape === 'long' || f.shape === 'cat' || f.shape === 'sturgeon';
   const bodyW = long ? w * 0.86 : w * 0.8;
   const bodyX = cx + w * 0.06;
 
@@ -75,6 +216,13 @@ function drawFish(g: PGraphics, f: FishDef): void {
       const x = cx - w * 0.18 + i * w * 0.07;
       g.fillTriangle(x, cy - h * 0.3, x + w * 0.06, cy - h * 0.3, x + w * 0.02, cy - h * 0.6);
     }
+  } else if (f.shape === 'sail') {
+    g.fillPoints([{ x: cx - w * 0.22, y: cy - h * 0.3 }, { x: cx - w * 0.16, y: cy - h * 0.62 }, { x: cx + w * 0.02, y: cy - h * 0.62 }, { x: cx + w * 0.12, y: cy - h * 0.3 }], true);
+    g.fillStyle(0xffffff, 0.35);
+    for (let i = 0; i < 3; i++) g.fillCircle(cx - w * 0.12 + i * w * 0.07, cy - h * 0.45, 2);
+    g.fillStyle(f.fin, 1);
+  } else if (f.shape === 'sturgeon') {
+    g.fillTriangle(cx - w * 0.2, cy - h * 0.3, cx - w * 0.08, cy - h * 0.3, cx - w * 0.18, cy - h * 0.55);
   } else if (f.shape === 'cat') {
     g.fillTriangle(cx - w * 0.05, cy - h * 0.3, cx + w * 0.05, cy - h * 0.3, cx - w * 0.02, cy - h * 0.55);
     g.fillEllipse(cx - w * 0.15, cy + h * 0.3, w * 0.5, h * 0.3); // длинный анальный плавник
@@ -87,7 +235,7 @@ function drawFish(g: PGraphics, f: FishDef): void {
   // тело
   g.fillStyle(f.color, 1);
   g.fillEllipse(bodyX, cy, bodyW, f.shape === 'cat' ? h * 0.85 : h);
-  if (f.shape === 'long') {
+  if (f.shape === 'long' || f.shape === 'sturgeon') {
     // морда-клин
     g.fillTriangle(bodyX + bodyW * 0.38, cy - h * 0.3, bodyX + bodyW * 0.38, cy + h * 0.25, cx + w / 2, cy + h * 0.02);
   }
@@ -101,6 +249,17 @@ function drawFish(g: PGraphics, f: FishDef): void {
   if (f.shape === 'striped') {
     g.fillStyle(0x2f3d12, 0.55);
     for (const k of [-0.18, -0.04, 0.1, 0.24]) g.fillRect(cx + w * k, cy - h * 0.38, w * 0.055, h * 0.58);
+  }
+  if (f.shape === 'sturgeon') {
+    g.fillStyle(f.belly, 0.9);
+    for (let i = 0; i < 9; i++) {
+      const x = cx - w * 0.3 + i * w * 0.07;
+      g.fillTriangle(x, cy - h * 0.36, x + w * 0.025, cy - h * 0.5, x + w * 0.05, cy - h * 0.36);
+    }
+  }
+  if (f.id === 'lenok' || f.id === 'treska' || f.id === 'albinos') {
+    g.fillStyle(f.id === 'albinos' ? 0xe8d8c8 : 0x3a2a1a, 0.45);
+    for (let i = 0; i < 10; i++) g.fillCircle(cx - w * 0.22 + (i % 5) * w * 0.1, cy - h * 0.16 + Math.floor(i / 5) * h * 0.2, 2.5);
   }
   if (f.shape === 'long' && f.id === 'shchuka') {
     g.fillStyle(0xd5dfa8, 0.55);
@@ -182,32 +341,48 @@ export function makeTextures(scene: PScene): void {
     g.destroy();
   }
 
-  // лодка с рыбаком (смотрит вправо, удочка вверх-вправо)
-  {
-    const g = make();
-    // рыбак
-    g.fillStyle(0x2e5a8a, 1); // куртка
+  // рыбак (смотрит вправо, удочка вверх-вправо); winter — ушанка и тулуп
+  const drawFisher = (g: PGraphics, winter: boolean) => {
+    const coat = winter ? 0x5a4632 : 0x2e5a8a;
+    g.fillStyle(coat, 1);
     g.fillRoundedRect(118, 70, 46, 56, 10);
     g.fillStyle(0xffffff, 1);
-    for (let i = 0; i < 4; i++) g.fillRect(124, 78 + i * 12, 34, 5); // тельняшка видна в вороте
-    g.fillStyle(0x2e5a8a, 1);
+    for (let i = 0; i < 4; i++) g.fillRect(124, 78 + i * 12, 34, 5);
+    g.fillStyle(coat, 1);
     g.fillRect(118, 78, 8, 46);
     g.fillRect(156, 78, 8, 46);
+    if (winter) {
+      g.fillStyle(0xe8dcc8, 1); // мех воротника
+      g.fillRoundedRect(116, 68, 50, 10, 5);
+    }
     g.fillStyle(0xf1c7a0, 1);
-    g.fillCircle(141, 52, 20); // голова
+    g.fillCircle(141, 52, 20);
     g.fillStyle(0x8a5a2b, 1);
-    g.fillEllipse(141, 66, 30, 12); // борода
-    g.fillStyle(0x3a3a3a, 1);
-    g.fillRoundedRect(119, 26, 44, 16, 6); // кепка
-    g.fillRect(150, 34, 22, 6);
+    g.fillEllipse(141, 66, 30, 12);
+    if (winter) {
+      g.fillStyle(0x4a3a2a, 1); // ушанка
+      g.fillRoundedRect(117, 22, 48, 22, 8);
+      g.fillRoundedRect(114, 36, 12, 24, 5);
+      g.fillRoundedRect(156, 36, 12, 24, 5);
+      g.fillStyle(0x6b5a48, 1);
+      g.fillRect(119, 38, 44, 6);
+    } else {
+      g.fillStyle(0x3a3a3a, 1);
+      g.fillRoundedRect(119, 26, 44, 16, 6);
+      g.fillRect(150, 34, 22, 6);
+    }
     g.fillStyle(0x111111, 1);
     g.fillCircle(150, 50, 2.5);
-    // удочка
     g.lineStyle(4, 0x7a4a1e, 1);
     g.lineBetween(160, 96, 270, 8);
     g.fillStyle(0xf1c7a0, 1);
     g.fillCircle(162, 96, 7);
-    // лодка
+  };
+
+  // лодка с рыбаком
+  {
+    const g = make();
+    drawFisher(g, false);
     g.fillStyle(0x9b5a2c, 1);
     g.beginPath();
     g.moveTo(10, 120);
@@ -223,6 +398,41 @@ export function makeTextures(scene: PScene): void {
     g.lineStyle(3, 0x5a3215, 1);
     g.lineBetween(45, 175, 245, 175);
     g.generateTexture('boat', 290, 180);
+    g.destroy();
+  }
+
+  // рыбак на льду: сидит на рыбацком ящике
+  {
+    const g = make();
+    drawFisher(g, true);
+    g.fillStyle(0x3a6ea5, 1);
+    g.fillRoundedRect(104, 118, 76, 44, 6);
+    g.fillStyle(0xd9e4ee, 1);
+    g.fillRect(104, 118, 76, 8);
+    g.fillStyle(0x2a2a2a, 1);
+    g.fillRect(136, 112, 12, 8);
+    g.fillStyle(0x7a4a1e, 1); // ледобур рядом
+    g.fillRect(40, 60, 6, 100);
+    g.fillRect(28, 60, 30, 6);
+    g.fillStyle(0x9aa4ad, 1);
+    g.fillRect(40, 150, 6, 22);
+    g.generateTexture('icefisher', 290, 180);
+    g.destroy();
+  }
+
+  // миниган (смотрит вправо)
+  {
+    const g = make();
+    g.fillStyle(0x2a2d31, 1);
+    g.fillRoundedRect(6, 8, 40, 26, 6);
+    g.fillRect(18, 30, 12, 14);
+    g.fillStyle(0x3a3f45, 1);
+    for (let i = 0; i < 3; i++) g.fillRect(44, 9 + i * 8, 70, 6);
+    g.fillStyle(0x6b737c, 1);
+    g.fillRect(44, 8, 70, 2);
+    g.fillRect(70, 6, 6, 28);
+    g.fillRect(104, 6, 6, 28);
+    g.generateTexture('gun_minigun', 116, 46);
     g.destroy();
   }
 

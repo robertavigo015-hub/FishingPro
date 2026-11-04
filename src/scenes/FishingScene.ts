@@ -1,5 +1,5 @@
-import { W, H, PPM, WATER_Y, ZONE_DEPTH, FISH, FISH_BY_ID, FishDef } from '../data';
-import { S, save, owns, reelDepth, currentGun, priceMult } from '../save';
+import { W, H, PPM, WATER_Y, FISH, FISH_BY_ID, FishDef, ZoneDef, ZONES } from '../data';
+import { S, save, owns, reelDepth, currentGun, priceMult, zone, best, zoneUnlocked } from '../save';
 import { getTilt, haptic, hideBack } from '../telegram';
 import { button, gradient, money, txt } from '../ui';
 import { sfx } from '../sound';
@@ -18,6 +18,9 @@ interface FishObj {
   oy: number;
   spin: number;
   ph: number;
+  wall?: boolean; // часть стенки из рыб
+  by?: number; // базовая высота для покачивания
+  bounced?: boolean; // уже отскочила ото льда
 }
 
 const FALL_MAX = 360;
@@ -28,7 +31,6 @@ const ASC_ACC = 130;
 const ASC_MAX = 950;
 const MAGNET = 70;
 const GRAV = 560;
-const BOTTOM_Y = WATER_Y + ZONE_DEPTH * PPM;
 // рука рыбака в мировых координатах (из текстуры лодки: кисть в точке 162,96)
 const HAND = { x: W / 2 - 30 - 145 + 162, y: WATER_Y - 60 - 90 + 92 };
 const GUN_SCALE = 1.8;
@@ -40,13 +42,30 @@ const GUNS: Record<string, GunArt> = {
   shotgun: { w: 130, h: 26, ox: 34, oy: 14, mx: 128, my: 10 },
   uzi: { w: 84, h: 40, ox: 34, oy: 24, mx: 82, my: 13 },
   magnum: { w: 96, h: 32, ox: 20, oy: 18, mx: 92, my: 10 },
+  minigun: { w: 116, h: 46, ox: 24, oy: 26, mx: 114, my: 18 },
 };
 const ROD_TIP = { x: W / 2 - 30 - 145 + 270, y: WATER_Y - 60 - 90 + 8 };
+const HOLE_X = ROD_TIP.x; // прорубь на Байкале
+const HOLE_HALF = 70;
+const ICE_TOP = WATER_Y + 6;
+const ENDLESS_CHUNK = 100; // м, сколько бездны генерируется за раз
+const ZONE_HINT: Record<string, string> = {
+  volga: 'Течение сносит блесну!\nНа разной глубине — в разные стороны',
+  baikal: 'Подо льдом темно.\nУлов отскакивает ото льда — успейте сбить!\nНерпу не трогать: штраф',
+  barents: 'Дна нет. Леска — ваш предел.\nКаждые 500 м — гигантский кальмар',
+};
 
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+const lerpColor = (c1: number, c2: number, k: number) => {
+  const r = ((c1 >> 16) & 255) + ((((c2 >> 16) & 255) - ((c1 >> 16) & 255)) * k);
+  const g = ((c1 >> 8) & 255) + ((((c2 >> 8) & 255) - ((c1 >> 8) & 255)) * k);
+  const b = (c1 & 255) + (((c2 & 255) - (c1 & 255)) * k);
+  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+};
 
 export class FishingScene extends Phaser.Scene {
+  private z!: ZoneDef;
   private phase: Phase = 'intro';
   private fish: FishObj[] = [];
   private hooked: FishObj[] = [];
@@ -55,6 +74,7 @@ export class FishingScene extends Phaser.Scene {
   private lureVY = 0;
   private lineG!: PGraphics;
   private barG!: PGraphics;
+  private waterG!: PGraphics;
   private dark!: PImage;
   private glow!: PImage;
   private cross!: PImage;
@@ -72,6 +92,12 @@ export class FishingScene extends Phaser.Scene {
   private camLocked = false;
   private bubbleT = 0;
   private lineLimitY = 0;
+  private lineLimitM = 0;
+  private bottomY = 0;
+  private spawnedTo = 0;
+  private curPhase = 0;
+  private streaks: PImage[] = [];
+  private lastBgScroll = -1;
   private gun: PImage = null;
   private gunInfo: GunArt = GUNS.pistol;
   private aim = -Math.PI / 2;
@@ -84,9 +110,11 @@ export class FishingScene extends Phaser.Scene {
 
   create(): void {
     hideBack();
+    this.z = zone();
     this.phase = 'intro';
     this.fish = [];
     this.hooked = [];
+    this.streaks = [];
     this.lureVX = 0;
     this.lureVY = 0;
     this.toasterReady = owns('toaster');
@@ -99,20 +127,35 @@ export class FishingScene extends Phaser.Scene {
     this.gun = null;
     this.recoil = 0;
     this.hitstop = 0;
-    this.lineLimitY = WATER_Y + Math.min(reelDepth(), ZONE_DEPTH) * PPM - 14;
+    this.lastBgScroll = -1;
+    this.curPhase = Math.random() * Math.PI * 2;
+    const endless = this.z.mechanic === 'endless';
+    this.lineLimitM = endless ? reelDepth() : Math.min(reelDepth(), this.z.depth - 0.5);
+    this.lineLimitY = WATER_Y + this.lineLimitM * PPM - 14;
+    this.bottomY = WATER_Y + (endless ? Math.min(this.lineLimitM, 100000) + 30 : this.z.depth) * PPM;
+    this.spawnedTo = 0;
 
     this.drawWorld();
-    this.spawn();
+    if (endless) this.spawnRange(0, ENDLESS_CHUNK * 2);
+    else this.spawnRange(0, this.z.depth);
 
     this.lineG = this.add.graphics().setDepth(19);
     this.lure = this.add.image(ROD_TIP.x, ROD_TIP.y, 'lure').setDepth(20).setOrigin(0.5, 0.15);
-    this.glow = this.add.image(0, 0, 'glow').setDepth(51).setBlendMode(Phaser.BlendModes.ADD).setScale(2.2).setAlpha(0);
+    this.glow = this.add.image(0, 0, 'glow').setDepth(51).setBlendMode(Phaser.BlendModes.ADD)
+      .setScale(owns('projector') ? 3.4 : 2.2).setAlpha(0);
     this.dark = this.add.rectangle(0, 0, W, H, 0x02070f, 1).setOrigin(0).setScrollFactor(0).setDepth(50).setAlpha(0);
     this.cross = this.add.image(0, 0, 'cross').setDepth(90).setVisible(false);
 
+    if (this.z.mechanic === 'current') {
+      for (let i = 0; i < 28; i++) {
+        this.streaks.push(this.add.image(rnd(0, W), WATER_Y + rnd(40, H), 'dot').setScale(rnd(3, 6), 0.16).setAlpha(0.35).setDepth(4));
+      }
+    }
+
     // HUD
     this.depthText = txt(this, 28, 22, '0 м', 52, '#ffffff', { fontStyle: 'bold', stroke: '#0b2236', strokeThickness: 8 }).setScrollFactor(0).setDepth(100);
-    this.subText = txt(this, 30, 86, `леска ${reelDepth()} м`, 24, '#ffffff', { stroke: '#0b2236', strokeThickness: 5 }).setScrollFactor(0).setDepth(100);
+    const lineLabel = reelDepth() >= 99999 ? 'леска ∞' : `леска ${reelDepth()} м`;
+    this.subText = txt(this, 30, 86, `${this.z.name} · ${lineLabel}`, 24, '#ffffff', { stroke: '#0b2236', strokeThickness: 5 }).setScrollFactor(0).setDepth(100);
     this.rightText = txt(this, W - 28, 26, '', 40, '#ffe58a', { fontStyle: 'bold', stroke: '#0b2236', strokeThickness: 8 }).setOrigin(1, 0).setScrollFactor(0).setDepth(100);
     this.msgText = txt(this, W / 2, 330, '', 34, '#ffffff', { fontStyle: 'bold', align: 'center', stroke: '#0b2236', strokeThickness: 8, wordWrap: { width: W - 80 } })
       .setOrigin(0.5).setScrollFactor(0).setDepth(100).setAlpha(0);
@@ -136,86 +179,212 @@ export class FishingScene extends Phaser.Scene {
         this.phase = 'descent';
         if (location.hash === '#debug-shoot') {
           // отладка стрельбы: сразу подбрасываем десяток случайных рыб
-          for (const f of this.fish.filter((o) => o.def.kind !== 'boss').sort(() => Math.random() - 0.5).slice(0, 10)) this.hook(f);
+          for (const f of this.fish.filter((o) => o.def.kind !== 'boss' && !o.wall).sort(() => Math.random() - 0.5).slice(0, 10)) this.hook(f);
           this.lure.y = WATER_Y + 4;
           this.startLaunch();
           return;
         }
-        if (S.d.bestDepth < 40) this.say('Уворачивайтесь от рыб!\nНаклон телефона, палец или ←/→', 3000);
+        if (this.z.id === 'pond' && best('pond') < 40) this.say('Уворачивайтесь от рыб!\nНаклон телефона, палец или ←/→', 3000);
+        else if (ZONE_HINT[this.z.id] && best(this.z.id) < 60) this.say(ZONE_HINT[this.z.id], 3200);
       },
     });
   }
 
   // ---------- мир ----------
   private drawWorld(): void {
+    const z = this.z;
     const g = this.add.graphics().setDepth(0);
-    gradient(g, 0, 0, W, WATER_Y, 0x6fbde6, 0xcdeaf5, 30);
-    gradient(g, 0, WATER_Y, W, BOTTOM_Y - WATER_Y + 40, 0x3f93c4, 0x061420, 90);
-    g.fillStyle(0xfff1b0, 1);
-    g.fillCircle(580, 260, 64);
-    g.fillStyle(0x5c8f3a, 1);
-    g.fillEllipse(90, WATER_Y + 4, 380, 60);
-    g.fillEllipse(650, WATER_Y + 4, 300, 46);
-    // дно
-    g.fillStyle(0x3b3222, 1);
-    g.fillRect(0, BOTTOM_Y + 30, W, 400);
-    g.fillStyle(0x4a3f2b, 1);
-    for (let i = 0; i < 12; i++) g.fillEllipse(i * 66 + 20, BOTTOM_Y + 34, 90, 30);
-    // отметки глубины
-    for (let d = 25; d < ZONE_DEPTH; d += 25) {
-      const y = WATER_Y + d * PPM;
-      g.fillStyle(0xffffff, d % 50 === 0 ? 0.18 : 0.08);
-      g.fillRect(0, y, d % 50 === 0 ? 46 : 24, 3);
-      if (d % 50 === 0) txt(this, 52, y - 12, d + ' м', 20, '#ffffff').setAlpha(0.3).setDepth(1);
+    gradient(g, 0, 0, W, WATER_Y, z.sky[0], z.sky[1], 30);
+    // вода рисуется в update() по глубине камеры — так работает и бездонное море
+    this.waterG = this.add.graphics().setScrollFactor(0).setDepth(0);
+
+    if (z.id === 'pond') {
+      g.fillStyle(0xfff1b0, 1);
+      g.fillCircle(580, 260, 64);
+      g.fillStyle(0x5c8f3a, 1);
+      g.fillEllipse(90, WATER_Y + 4, 380, 60);
+      g.fillEllipse(650, WATER_Y + 4, 300, 46);
+      this.add.image(660, WATER_Y - 70, 'reeds').setDepth(2);
+    } else if (z.id === 'volga') {
+      g.fillStyle(0xfff4d0, 1);
+      g.fillCircle(150, 300, 54);
+      g.fillStyle(0xc9a86a, 1); // высокий песчаный берег
+      g.fillRect(0, WATER_Y - 120, W, 124);
+      g.fillStyle(0x7a9a4a, 1);
+      g.fillRect(0, WATER_Y - 130, W, 14);
+      g.fillStyle(0x6b8a3e, 1);
+      for (let i = 0; i < 14; i++) g.fillCircle(20 + i * 52, WATER_Y - 136, 26);
+      // церковь на холме
+      g.fillStyle(0xf2efe6, 1);
+      g.fillRect(520, WATER_Y - 230, 60, 100);
+      g.fillRect(538, WATER_Y - 290, 24, 60);
+      g.fillStyle(0xd4a52a, 1);
+      g.fillCircle(550, WATER_Y - 300, 16);
+      g.fillCircle(550, WATER_Y - 232, 22);
+      g.fillStyle(0x3f7fa8, 1);
+      g.fillRect(0, WATER_Y - 6, W, 10);
+    } else if (z.id === 'baikal') {
+      g.fillStyle(0xdfe9f2, 1); // заснеженные горы
+      g.fillTriangle(-40, WATER_Y, 160, WATER_Y - 330, 360, WATER_Y);
+      g.fillTriangle(260, WATER_Y, 480, WATER_Y - 420, 700, WATER_Y);
+      g.fillTriangle(520, WATER_Y, 700, WATER_Y - 260, 860, WATER_Y);
+      g.fillStyle(0xffffff, 1);
+      g.fillTriangle(120, WATER_Y - 260, 160, WATER_Y - 330, 200, WATER_Y - 260);
+      g.fillTriangle(430, WATER_Y - 340, 480, WATER_Y - 420, 530, WATER_Y - 340);
+      g.fillStyle(0xb8c9d8, 1);
+      g.fillRect(0, WATER_Y - 30, W, 40);
+    } else if (z.id === 'barents') {
+      g.fillStyle(0x5d6a74, 1); // скалы
+      g.fillTriangle(-20, WATER_Y, 90, WATER_Y - 180, 220, WATER_Y);
+      g.fillTriangle(560, WATER_Y, 650, WATER_Y - 140, 760, WATER_Y);
+      g.fillStyle(0xffffff, 0.5);
+      for (let i = 0; i < 8; i++) g.fillEllipse(40 + i * 95, WATER_Y - 4 + (i % 2) * 6, 70, 10);
     }
+
+    // дно (у бездны его нет)
+    if (z.mechanic !== 'endless') {
+      g.fillStyle(z.floor, 1);
+      g.fillRect(0, this.bottomY + 30, W, 400);
+      g.fillStyle(lerpColor(z.floor, 0xffffff, 0.12), 1);
+      for (let i = 0; i < 12; i++) g.fillEllipse(i * 66 + 20, this.bottomY + 34, 90, 30);
+      for (let i = 0; i < 8; i++) this.add.image(40 + i * 92, this.bottomY - 30, 'weed').setDepth(3).setScale(rnd(0.8, 1.3));
+      this.depthMarks(0, z.depth);
+    }
+
     this.add.image(120, 100, 'cloud').setDepth(1);
     this.add.image(470, 420, 'cloud').setScale(0.8).setDepth(1);
-    this.add.image(660, WATER_Y - 70, 'reeds').setDepth(2);
-    for (let i = 0; i < 8; i++) this.add.image(40 + i * 92, BOTTOM_Y - 30, 'weed').setDepth(3).setScale(rnd(0.8, 1.3));
-    const boat = this.add.image(W / 2 - 30, WATER_Y - 60, 'boat').setDepth(25);
-    this.tweens.add({ targets: boat, y: WATER_Y - 55, duration: 1600, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
-    // линия воды поверх лодки
-    const wg = this.add.graphics().setDepth(26);
-    wg.fillStyle(0x3f93c4, 0.55);
-    wg.fillRect(0, WATER_Y, W, 14);
+
+    if (z.mechanic === 'ice') {
+      this.add.image(W / 2 - 30, WATER_Y - 60, 'icefisher').setDepth(25);
+      const ice = this.add.graphics().setDepth(26);
+      const iceRect = (x0: number, x1: number) => {
+        ice.fillStyle(0xcfe3f0, 1);
+        ice.fillRect(x0, ICE_TOP, x1 - x0, 34);
+        ice.fillStyle(0xffffff, 1);
+        ice.fillRect(x0, ICE_TOP, x1 - x0, 7);
+        ice.fillStyle(0x9fc0d6, 1);
+        ice.fillRect(x0, ICE_TOP + 30, x1 - x0, 4);
+      };
+      iceRect(0, HOLE_X - HOLE_HALF);
+      iceRect(HOLE_X + HOLE_HALF, W);
+      ice.fillStyle(0x1d4a66, 1);
+      ice.fillRect(HOLE_X - HOLE_HALF, WATER_Y + 2, HOLE_HALF * 2, 6);
+      ice.lineStyle(2, 0xffffff, 0.6);
+      for (let i = 0; i < 6; i++) ice.lineBetween(30 + i * 100, ICE_TOP + 12, 70 + i * 100, ICE_TOP + 24);
+    } else {
+      const boat = this.add.image(W / 2 - 30, WATER_Y - 60, 'boat').setDepth(25);
+      this.tweens.add({ targets: boat, y: WATER_Y - 55, duration: 1600, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+      const wg = this.add.graphics().setDepth(26);
+      wg.fillStyle(z.water[0], 0.55);
+      wg.fillRect(0, WATER_Y, W, 14);
+    }
   }
 
-  private spawn(): void {
-    for (const def of FISH) {
+  private depthMarks(from: number, to: number): void {
+    const step = this.z.mechanic === 'endless' ? 50 : 25;
+    for (let d = Math.ceil(Math.max(step, from) / step) * step; d < to; d += step) {
+      const y = WATER_Y + d * PPM;
+      const g = this.add.graphics().setDepth(1);
+      const major = d % (step * 2) === 0;
+      g.fillStyle(0xffffff, major ? 0.18 : 0.08);
+      g.fillRect(0, y, major ? 46 : 24, 3);
+      if (major) txt(this, 52, y - 12, d + ' м', 20, '#ffffff').setAlpha(0.3).setDepth(1);
+    }
+  }
+
+  /** Расставляет рыб зоны на глубинах [from, to). В бездне вызывается по мере спуска. */
+  private spawnRange(from: number, to: number): void {
+    const z = this.z;
+    const endless = z.mechanic === 'endless';
+    const defs = FISH.filter((f) => f.zone === z.id);
+    for (const def of defs) {
       if (def.kind === 'boss') {
-        this.place(def, def.midD, W / 2);
+        if (!endless) {
+          if (def.midD >= from && def.midD < to) this.place(def, def.midD, W / 2);
+        } else {
+          for (let d = Math.ceil(Math.max(from, 1) / 500) * 500; d < to; d += 500) this.place(def, d, W / 2);
+        }
         continue;
       }
       if (def.kind === 'rare') {
-        if (Math.random() < (def.odds ?? 0)) this.place(def, rnd(def.minD, def.maxD));
+        if (!endless) {
+          if (from === 0 && Math.random() < (def.odds ?? 0)) this.place(def, rnd(def.minD, def.maxD));
+        } else {
+          for (let d = Math.max(from, def.minD); d < to; d += ENDLESS_CHUNK) {
+            if (Math.random() < (def.odds ?? 0) / 4) this.place(def, rnd(d, d + ENDLESS_CHUNK));
+          }
+        }
         continue;
       }
       let acc = Math.random();
-      for (let d = def.minD; d < def.maxD; d += 10) {
+      const start = Math.max(from, def.minD);
+      const end = Math.min(to, def.maxD);
+      for (let d = start; d < end; d += 10) {
         const k = d < def.midD ? (d - def.minD) / Math.max(1, def.midD - def.minD) : (def.maxD - d) / Math.max(1, def.maxD - def.midD);
-        acc += (def.perHundred / 10) * (0.25 + 0.75 * clamp(k, 0, 1));
+        const deep = endless ? Math.min(3, 1 + d / 600) : 1; // в бездне рыбы всё больше (до ×3)
+        acc += (def.perHundred / 10) * (0.25 + 0.75 * clamp(k, 0, 1)) * deep;
         while (acc >= 1) {
           acc -= 1;
           const dd = d + Math.random() * 10;
-          if (dd >= 7 && dd < ZONE_DEPTH - 4) this.place(def, dd);
+          if (dd >= 7 && (endless || dd < z.depth - 4)) this.place(def, dd);
         }
       }
     }
+    // стенки из рыб с проходом
+    if (z.walls) {
+      let d = Math.max(from, 60) + rnd(10, 60);
+      const limit = endless ? to : Math.min(to, z.depth - 30);
+      while (d < limit) {
+        if (Math.random() < 0.55) this.wall(d, defs);
+        d += rnd(70, 130) / (endless ? 1 + d / 2000 : 1);
+      }
+    }
+    if (endless) this.depthMarks(from, to);
+    this.spawnedTo = Math.max(this.spawnedTo, to);
   }
 
-  private place(def: FishDef, depth: number, x?: number): void {
+  private wall(depth: number, defs: FishDef[]): void {
+    const cands = defs.filter((f) => f.kind === 'fish' && f.minD <= depth && f.maxD >= depth && !f.ghost).sort((a, b) => a.w - b.w);
+    const def = cands[0];
+    if (!def) return;
+    const gap = 190;
+    const gx = rnd(110, W - 110);
+    const stepX = def.w + 8;
+    const vx = Math.random() < 0.35 ? rnd(30, 70) * (Math.random() < 0.5 ? -1 : 1) : 0;
+    for (let x = def.w / 2 + 4; x < W; x += stepX) {
+      if (Math.abs(x - gx) < gap / 2) continue;
+      const o = this.place(def, depth, x);
+      o.wall = true;
+      o.vx = vx;
+      o.by = o.spr.y;
+      o.spr.setFlipX(vx < 0);
+    }
+  }
+
+  private place(def: FishDef, depth: number, x?: number): FishObj {
     const px = x ?? rnd(def.w / 2 + 10, W - def.w / 2 - 10);
     const spr = this.add.image(px, WATER_Y + depth * PPM, 'fish_' + def.id).setDepth(def.kind === 'boss' ? 9 : 10);
     const dir = Math.random() < 0.5 ? -1 : 1;
-    const vx = def.speed * rnd(0.6, 1) * dir;
+    const sp = this.z.mechanic === 'endless' ? 1 + depth / 1500 : 1;
+    const vx = def.speed * rnd(0.6, 1) * dir * sp;
     spr.setFlipX(vx < 0);
-    this.fish.push({ def, spr, vx, vy: 0, hp: def.hp, st: 'swim', ox: 0, oy: 0, spin: 0, ph: Math.random() * 6 });
+    if (def.ghost) spr.setAlpha(0.12);
+    const o: FishObj = { def, spr, vx, vy: 0, hp: def.hp, st: 'swim', ox: 0, oy: 0, spin: 0, ph: Math.random() * 6 };
+    this.fish.push(o);
+    return o;
+  }
+
+  /** Скорость течения на глубине, px/с (вправо — плюс). */
+  private currentAt(depthM: number): number {
+    if (this.z.mechanic !== 'current' || depthM <= 0) return 0;
+    return 230 * Math.sin(depthM / 38 + this.curPhase) * Math.min(1, depthM / 40);
   }
 
   // ---------- цикл ----------
   update(time: number, delta: number): void {
     const dt = Math.min(delta, 50) / 1000;
     const cam = this.cameras.main;
+    const z = this.z;
 
     this.updateSwimmers(dt, cam.scrollY, time);
 
@@ -223,14 +392,25 @@ export class FishingScene extends Phaser.Scene {
     else if (this.phase === 'ascent') this.updateAscent(dt, time);
     else if (this.phase === 'launch') this.updateLaunch(dt, time);
 
+    // бездна догенерируется по мере спуска
+    if (z.mechanic === 'endless' && this.phase === 'descent') {
+      const d = (this.lure.y - WATER_Y) / PPM;
+      if (d + ENDLESS_CHUNK * 1.2 > this.spawnedTo && this.spawnedTo < this.lineLimitM + 20) {
+        this.spawnRange(this.spawnedTo, this.spawnedTo + ENDLESS_CHUNK);
+      }
+    }
+
     // камера
     if (!this.camLocked) {
       let target = cam.scrollY;
       if (this.phase === 'descent') target = this.lure.y - 400;
       if (this.phase === 'ascent') target = this.lure.y - 880;
-      target = clamp(target, 0, BOTTOM_Y + 300 - H);
+      target = clamp(target, 0, this.bottomY + 300 - H);
       cam.scrollY += (target - cam.scrollY) * Math.min(1, dt * 7);
     }
+
+    this.drawWater(cam.scrollY);
+    this.updateStreaks(dt, cam.scrollY);
 
     // леска
     this.lineG.clear();
@@ -241,11 +421,44 @@ export class FishingScene extends Phaser.Scene {
 
     // темнота и свет
     const camDepth = (cam.scrollY + H / 2 - WATER_Y) / PPM;
-    const darkA = clamp(camDepth / ZONE_DEPTH, 0, 1) * 0.68 * (owns('lamp') ? 0.45 : 1);
+    const lampK = owns('projector') ? 0.25 : owns('lamp') ? 0.5 : 1;
+    const k = clamp(camDepth / z.visualDepth, 0, 1);
+    const darkA = (z.darkBase + (z.dark - z.darkBase) * k) * lampK * clamp(camDepth / 15, 0, 1);
     this.dark.setAlpha(darkA);
     this.glow.setPosition(this.lure.x, this.lure.y + 10).setAlpha(this.lure.y > WATER_Y ? darkA * 1.1 : 0);
 
     this.updateHud();
+  }
+
+  private drawWater(scrollY: number): void {
+    if (Math.abs(scrollY - this.lastBgScroll) < 3) return;
+    this.lastBgScroll = scrollY;
+    const z = this.z;
+    const g = this.waterG;
+    g.clear();
+    const top = Math.max(0, WATER_Y - scrollY);
+    if (top >= H) return;
+    const bands = 24;
+    const bh = (H - top) / bands;
+    for (let i = 0; i < bands; i++) {
+      const y = top + i * bh;
+      const depthM = (scrollY + y + bh / 2 - WATER_Y) / PPM;
+      g.fillStyle(lerpColor(z.water[0], z.water[1], clamp(depthM / z.visualDepth, 0, 1)), 1);
+      g.fillRect(0, y, W, bh + 1);
+    }
+  }
+
+  private updateStreaks(dt: number, scrollY: number): void {
+    for (const st of this.streaks) {
+      const d = (st.y - WATER_Y) / PPM;
+      st.x += this.currentAt(d) * 1.8 * dt;
+      const off = st.y < scrollY - 20 || st.y > scrollY + H + 20 || st.y < WATER_Y + 10;
+      if (st.x < -80 || st.x > W + 80 || off) {
+        st.y = Math.max(WATER_Y + 20, scrollY + rnd(0, H));
+        const c = this.currentAt((st.y - WATER_Y) / PPM);
+        st.x = off ? rnd(0, W) : c > 0 ? -60 : W + 60;
+      }
+    }
   }
 
   private updateHud(): void {
@@ -261,26 +474,41 @@ export class FishingScene extends Phaser.Scene {
     g.clear();
     if (this.phase === 'descent' || this.phase === 'ascent' || this.phase === 'intro') {
       const x = W - 26, y0 = 120, h = 520;
+      const rec = best(this.z.id);
+      const scale = this.z.mechanic === 'endless' ? Math.max(1000, rec * 1.25, depth * 1.1) : this.z.depth;
       g.fillStyle(0x0b2236, 0.5);
       g.fillRoundedRect(x - 8, y0 - 8, 16, h + 16, 8);
-      const lim = Math.min(reelDepth(), ZONE_DEPTH) / ZONE_DEPTH;
       g.fillStyle(0xffffff, 0.25);
-      g.fillRect(x - 3, y0, 6, h * lim);
+      g.fillRect(x - 3, y0, 6, h * clamp(this.lineLimitM / scale, 0, 1));
       g.fillStyle(0xf2b822, 1);
-      g.fillCircle(x, y0 + h * clamp(depth / ZONE_DEPTH, 0, 1), 9);
-      if (S.d.bestDepth > 0) {
+      g.fillCircle(x, y0 + h * clamp(depth / scale, 0, 1), 9);
+      if (rec > 0) {
         g.fillStyle(0xd9533b, 1);
-        g.fillRect(x - 12, y0 + h * clamp(S.d.bestDepth / ZONE_DEPTH, 0, 1) - 2, 24, 4);
+        g.fillRect(x - 12, y0 + h * clamp(rec / scale, 0, 1) - 2, 24, 4);
       }
     }
   }
 
   private updateSwimmers(dt: number, scrollY: number, time: number): void {
+    const lx = this.lure.x, ly = this.lure.y;
+    const lightR = owns('projector') ? 330 : 210;
     for (const f of this.fish) {
       if (f.st !== 'swim') continue;
-      if (Math.abs(f.spr.y - scrollY - H / 2) > H * 1.4) continue;
+      // далёкие от экрана рыбы не рисуются и не двигаются (в бездне их тысячи)
+      const near = Math.abs(f.spr.y - scrollY - H / 2) < H * 1.4;
+      if (f.spr.visible !== near) f.spr.setVisible(near);
+      if (!near) continue;
       const hw = f.def.w / 2 + 4;
-      f.spr.x += f.vx * dt;
+      if (f.wall) {
+        f.spr.y = (f.by ?? f.spr.y) + Math.sin(time / 500 + f.spr.x / 60) * 4;
+        if (f.vx) {
+          f.spr.x += f.vx * dt;
+          if (f.spr.x < -hw) f.spr.x += W + hw * 2;
+          if (f.spr.x > W + hw) f.spr.x -= W + hw * 2;
+        }
+        continue;
+      }
+      f.spr.x += (f.vx + this.currentAt((f.spr.y - WATER_Y) / PPM) * 0.3) * dt;
       if (f.spr.x < hw) {
         f.vx = Math.abs(f.vx);
         f.spr.setFlipX(false);
@@ -289,6 +517,10 @@ export class FishingScene extends Phaser.Scene {
         f.spr.setFlipX(true);
       }
       if (f.def.kind === 'junk') f.spr.rotation = Math.sin(time / 900 + f.ph) * 0.4;
+      if (f.def.ghost) {
+        const d = Math.hypot(f.spr.x - lx, f.spr.y - ly);
+        f.spr.setAlpha(d < lightR ? 1 - (d / lightR) * 0.7 : 0.1);
+      }
     }
   }
 
@@ -302,7 +534,8 @@ export class FishingScene extends Phaser.Scene {
     else if (tilt !== null && Math.abs(tilt) > 0.06) desired = tilt * LAT;
     // инерция — приманка слегка «непослушная»
     this.lureVX += (desired - this.lureVX) * Math.min(1, dt * 6);
-    this.lure.x = clamp(this.lure.x + this.lureVX * dt + Math.sin(time / 280) * 0.5, 18, W - 18);
+    const drift = this.currentAt((this.lure.y - WATER_Y) / PPM);
+    this.lure.x = clamp(this.lure.x + (this.lureVX + drift) * dt + Math.sin(time / 280) * 0.5, 18, W - 18);
     this.lure.rotation = (-this.lureVX / LAT) * 0.35;
   }
 
@@ -320,7 +553,7 @@ export class FishingScene extends Phaser.Scene {
 
     if (this.lure.y >= this.lineLimitY) {
       this.lure.y = this.lineLimitY;
-      this.say(reelDepth() < ZONE_DEPTH ? 'Леска кончилась!\nКупите длиннее в магазине' : 'Дно!', 1600);
+      this.say(reelDepth() < this.z.depth ? 'Леска кончилась!\nКупите длиннее в магазине' : 'Дно!', 1600);
       this.startAscent();
       return;
     }
@@ -343,7 +576,7 @@ export class FishingScene extends Phaser.Scene {
     this.lureVY = ASC_START;
     this.maxDepth = Math.max(this.maxDepth, (this.lure.y - WATER_Y) / PPM);
     haptic('medium');
-    if (S.d.bestDepth < 40 && this.hooked.length <= 1) this.say('Теперь ловите!\nСобирайте рыбу на подъёме', 2200);
+    if (this.z.id === 'pond' && best('pond') < 40 && this.hooked.length <= 1) this.say('Теперь ловите!\nСобирайте рыбу на подъёме', 2200);
   }
 
   private updateAscent(dt: number, time: number): void {
@@ -366,6 +599,10 @@ export class FishingScene extends Phaser.Scene {
       f.spr.rotation = -Math.PI / 2 + Math.sin(time / 220 + f.ph) * 0.18;
     });
 
+    if (this.z.mechanic === 'ice') {
+      const d = (this.lure.y - WATER_Y) / PPM;
+      if (d < 14) this.lure.x += (HOLE_X - this.lure.x) * Math.min(1, dt * (16 - d));
+    }
     if (this.lure.y <= WATER_Y + 6) this.startLaunch();
   }
 
@@ -417,7 +654,7 @@ export class FishingScene extends Phaser.Scene {
     }
     this.hooked = [];
     haptic('heavy');
-    if (S.d.bestDepth < 40) this.say('Стреляйте пальцем!\nМусор не трогайте — штраф', 2400);
+    if (this.z.id === 'pond' && best('pond') < 40) this.say('Стреляйте пальцем!\nМусор не трогайте — штраф', 2400);
     this.cross.setVisible(true);
     this.showGun();
   }
@@ -479,6 +716,24 @@ export class FishingScene extends Phaser.Scene {
       if (f.spr.x < hw || f.spr.x > W - hw) {
         f.vx = -f.vx;
         f.spr.x = clamp(f.spr.x, hw, W - hw);
+      }
+      const onIce = this.z.mechanic === 'ice' && Math.abs(f.spr.x - HOLE_X) > HOLE_HALF;
+      if (onIce && f.vy > 0 && f.spr.y > ICE_TOP - f.def.h * 0.3) {
+        if (!f.bounced) {
+          // первый удар о лёд: отскок — ещё один шанс сбить
+          f.bounced = true;
+          f.spr.y = ICE_TOP - f.def.h * 0.3;
+          f.vy = -Math.abs(f.vy) * 0.5;
+          f.vx *= 0.8;
+          f.spin *= -0.6;
+          sfx.hit();
+          this.splash(f.spr.x, ICE_TOP, 5);
+        } else {
+          f.st = 'lost';
+          const away = f.spr.x < HOLE_X ? -1 : 1;
+          this.tweens.add({ targets: f.spr, x: f.spr.x + away * 500, y: ICE_TOP - f.def.h * 0.3, alpha: 0, duration: 700, ease: 'Quad.out', onComplete: () => f.spr.destroy() });
+        }
+        continue;
       }
       if (f.vy > 0 && f.spr.y > WATER_Y + 8) {
         f.st = 'lost';
@@ -641,7 +896,10 @@ export class FishingScene extends Phaser.Scene {
     this.runMoney += v;
     this.killed[f.def.id] = (this.killed[f.def.id] || 0) + 1;
     this.hitstop = f.def.kind === 'boss' ? 0.18 : 0.045;
-    const t = txt(this, f.spr.x, f.spr.y, (v > 0 ? '+' : '−') + money(Math.abs(v)), v > 0 ? 34 : 38, v > 0 ? '#ffe58a' : '#ff6b5a', {
+    const prot = f.def.kind === 'protected';
+    const label = (prot ? 'Штраф ' : '') + (v > 0 ? '+' : '−') + money(Math.abs(v));
+    if (prot) this.say(`${f.def.name} — охраняемое животное!`, 1400);
+    const t = txt(this, f.spr.x, f.spr.y, label, v > 0 ? 34 : 38, v > 0 ? '#ffe58a' : '#ff6b5a', {
       fontStyle: 'bold', stroke: '#0b2236', strokeThickness: 6,
     }).setOrigin(0.5).setDepth(85).setScale(0.4);
     this.tweens.add({ targets: t, scale: 1, duration: 140, ease: 'Back.out' });
@@ -688,13 +946,18 @@ export class FishingScene extends Phaser.Scene {
     this.phase = 'results';
     this.cross.setVisible(false);
     this.cameras.main.scrollY = 0;
+    this.msgText.setDepth(170).setY(H - 110);
 
     const newOnes = Object.keys(this.killed).filter((id) => !(S.d.caught[id] > 0));
+    const lockedBefore = ZONES.filter((zz) => !zoneUnlocked(zz));
     S.d.money = Math.max(0, S.d.money + this.runMoney);
     for (const [id, n] of Object.entries(this.killed)) S.d.caught[id] = (S.d.caught[id] || 0) + n;
-    const record = this.maxDepth > S.d.bestDepth;
-    S.d.bestDepth = Math.max(S.d.bestDepth, this.maxDepth);
+    const record = this.maxDepth > best(this.z.id);
+    S.d.best[this.z.id] = Math.max(best(this.z.id), this.maxDepth);
+    if (this.z.id === 'pond') S.d.bestDepth = S.d.best.pond;
+    const opened = lockedBefore.filter((zz) => zoneUnlocked(zz));
     save();
+    if (opened.length) this.time.delayedCall(500, () => this.say(`Открыта зона:\n${opened.map((zz) => zz.name).join(', ')}!`, 3000));
 
     const shade = this.add.rectangle(0, 0, W, H, 0x000000, 0.45).setOrigin(0).setDepth(150);
     shade.setInteractive(); // блокирует клики под панелью
@@ -721,7 +984,7 @@ export class FishingScene extends Phaser.Scene {
       const n = this.killed[id];
       const v = (def.value > 0 ? Math.round(def.value * priceMult()) : def.value) * n;
       this.add.image(110, y + 18, 'fish_' + id).setScale(Math.min(60 / (def.w + 12), 36 / (def.h + 12), 1)).setDepth(d);
-      const nt = txt(this, 160, y, `${def.name} ×${n}`, 28, '#ffffff').setDepth(d);
+      const nt = txt(this, 160, y, `${def.kind === 'protected' ? 'Штраф: ' : ''}${def.name} ×${n}`, 28, def.kind === 'protected' ? '#ff8a7a' : '#ffffff').setDepth(d);
       if (newOnes.includes(id)) txt(this, nt.x + nt.width + 12, y + 5, 'НОВИНКА', 19, '#7fd1a0', { fontStyle: 'bold' }).setDepth(d);
       txt(this, W - 80, y, (v >= 0 ? '+' : '−') + money(Math.abs(v)), 28, v >= 0 ? '#ffe58a' : '#ff8a7a', { fontStyle: 'bold' }).setOrigin(1, 0).setDepth(d);
       y += 46;
